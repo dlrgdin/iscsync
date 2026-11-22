@@ -34,6 +34,7 @@ import os
 ISC_URL = os.environ.get("ISC_URL") or "https://dinslaken.dlrg.de/die-ortsgruppe/termine/icaltermine/"
 AUSSCHLIESSEN = [
     "Aufsicht Wassergymnastik",
+    "Kurs Wassergewöhnung",
 ]
 ABGESAGTE_ENTFERNEN = True
 DOPPELTE_ENTFERNEN = True
