@@ -10,6 +10,7 @@ import os
 
 # ===================== Einstellungen =====================
 MONATE_VORAUS = 12                 # wie weit in die Zukunft
+MONATE_ZURUECK = 12                # wie weit zurueck (vergangene Termine)
 TITEL = "Termine"
 UNTERTITEL = "DLRG Ortsgruppe Dinslaken e.V."
 ABO_LINK = os.environ.get("ABO_LINK", "")   # oeffentlicher Abo-Link (webcal/https), optional
@@ -217,6 +218,10 @@ TEMPLATE = r"""<!DOCTYPE html>
   .lmonat{font-size:1.05rem;font-weight:700;margin:22px 0 4px;padding:6px 0;border-bottom:1px solid var(--linie);color:var(--rot)}
   .lmonat span{color:var(--grau);font-weight:400}
   .leer{color:var(--grau);padding:14px 0;margin:0}
+  ol.liste li.vorbei{opacity:.55}
+  .zelle .ev.vorbei{opacity:.55}
+  .rueck{font:inherit;font-size:.85rem;background:none;border:0;color:var(--rot);font-weight:600;cursor:pointer;padding:4px 0;margin:4px 0 0}
+  .rueck:hover{text-decoration:underline}
   footer{margin-top:18px;display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;font-size:.8rem;color:var(--grau)}
   .abo{color:var(--rot);font-weight:600;text-decoration:none}
   .abo:hover{text-decoration:underline}
@@ -280,11 +285,12 @@ TEMPLATE = r"""<!DOCTYPE html>
   function sicht(){return D.filter(function(e){return !filt||e.k===filt;});}
   function amTag(ds){return sicht().filter(function(e){return e.von<=ds&&e.bis>=ds;});}
   var letzterMonat=(function(){var m=heute; D.forEach(function(e){var b=parse(e.bis); if(b>m)m=b;}); return new Date(m.getFullYear(),m.getMonth(),1);})();
-  var ersterMonat=new Date(heute.getFullYear(),heute.getMonth(),1);
+  var ersterMonat=(function(){var m=heute; D.forEach(function(e){var v=parse(e.von); if(v<m)m=v;}); return new Date(m.getFullYear(),m.getMonth(),1);})();
+  var mitVergangenen=false;
 
   function eintrag(e,mitDatum){
     var v=parse(e.von);
-    return '<li data-k="'+esc(e.k)+'"><div class="datum"><span class="tag">'+v.getDate()+'</span><span class="wtag">'+WT[(v.getDay()+6)%7]+'</span></div>'+
+    return '<li data-k="'+esc(e.k)+'"'+(e.bis<iso(heute)?' class="vorbei"':'')+'><div class="datum"><span class="tag">'+v.getDate()+'</span><span class="wtag">'+WT[(v.getDay()+6)%7]+'</span></div>'+
       '<div class="info"><h4>'+esc(e.t)+'</h4><p><span class="zeit">'+esc(e.z)+'</span>'+(e.o?'<span class="ort">'+esc(e.o)+'</span>':'')+'</p></div>'+
       '<span class="kat" data-k="'+esc(e.k)+'">'+esc(e.k)+'</span></li>';
   }
@@ -313,7 +319,7 @@ TEMPLATE = r"""<!DOCTYPE html>
       var inner='<span class="nr">'+d.getDate()+'</span>';
       var max=3;
       ev.slice(0,max).forEach(function(e){
-        inner+='<button type="button" class="ev" data-k="'+esc(e.k)+'" title="'+esc(e.t+' – '+e.z+(e.o?' · '+e.o:''))+'">'+(e.uhr&&e.von===ds?'<b>'+e.uhr+'</b>':'')+esc(e.t)+'</button>';
+        inner+='<button type="button" class="ev'+(e.bis<iso(heute)?' vorbei':'')+'" data-k="'+esc(e.k)+'" title="'+esc(e.t+' – '+e.z+(e.o?' · '+e.o:''))+'">'+(e.uhr&&e.von===ds?'<b>'+e.uhr+'</b>':'')+esc(e.t)+'</button>';
       });
       if(ev.length>max) inner+='<button type="button" class="mehr">+'+(ev.length-max)+' weitere</button>';
       if(ev.length) inner+='<div class="punkte">'+ev.slice(0,4).map(function(e){return '<i data-k="'+esc(e.k)+'"></i>';}).join('')+'</div>';
@@ -325,21 +331,25 @@ TEMPLATE = r"""<!DOCTYPE html>
     var mstart=iso(new Date(y,m,1)), mende=iso(new Date(y,m+1,0));
     if(gewaehlt&&gewaehlt>=mstart&&gewaehlt<=mende){zeigeTag(gewaehlt);return;}
     gewaehlt=null;
-    var ab = (y===heute.getFullYear()&&m===heute.getMonth())? iso(heute) : mstart;
-    var ev=sicht().filter(function(e){return e.bis>=ab&&e.von<=mende;});
+    var ev=sicht().filter(function(e){return e.bis>=mstart&&e.von<=mende;});
     document.getElementById('detail').innerHTML='<h3>Termine im '+MON[m]+'</h3>'+(ev.length?'<ol class="liste">'+ev.map(function(e){return eintrag(e);}).join('')+'</ol>':'<p class="leer">Keine Termine in diesem Monat.</p>');
     hoehe();
   }
 
   function liste(){
-    var h='', akt='';
-    sicht().forEach(function(e){
+    var h='', akt='', alle=sicht(), hs=iso(heute);
+    var vergangen=alle.filter(function(e){return e.bis<hs;}).length;
+    var zeigen=alle.filter(function(e){return mitVergangenen||e.bis>=hs;});
+    if(vergangen) h+='<button type="button" class="rueck" id="rueck">'+(mitVergangenen?'Vergangene Termine ausblenden':'Vergangene Termine anzeigen ('+vergangen+')')+'</button>';
+    zeigen.forEach(function(e){
       var v=parse(e.von), k=v.getFullYear()+'-'+v.getMonth();
       if(k!==akt){ if(akt) h+='</ol>'; h+='<h3 class="lmonat">'+MON[v.getMonth()]+' <span>'+v.getFullYear()+'</span></h3><ol class="liste">'; akt=k; }
       h+=eintrag(e);
     });
-    if(akt) h+='</ol>'; else h='<p class="leer">Zurzeit stehen keine Termine an.</p>';
-    document.getElementById('liste').innerHTML=h; hoehe();
+    if(akt) h+='</ol>'; else h+='<p class="leer">Zurzeit stehen keine Termine an.</p>';
+    document.getElementById('liste').innerHTML=h;
+    var rb=document.getElementById('rueck'); if(rb) rb.onclick=function(){mitVergangenen=!mitVergangenen; liste();};
+    hoehe();
   }
 
   function neu(){ if(ansicht==='monat') monat(); else liste(); }
@@ -364,8 +374,9 @@ TEMPLATE = r"""<!DOCTYPE html>
 
 def main():
     jetzt = dt.datetime.now(BERLIN)
-    von = jetzt.replace(hour=0, minute=0, second=0, microsecond=0)
-    bis = von + dt.timedelta(days=31 * MONATE_VORAUS)
+    heute0 = jetzt.replace(hour=0, minute=0, second=0, microsecond=0)
+    von = heute0 - dt.timedelta(days=31 * MONATE_ZURUECK)
+    bis = heute0 + dt.timedelta(days=31 * MONATE_VORAUS)
     if len(sys.argv) > 1:
         texte = [open(p, encoding="utf-8").read() for p in sys.argv[1:]]
     else:

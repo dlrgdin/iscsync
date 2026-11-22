@@ -6,7 +6,7 @@ Holt die Termine aus dem iCal-Export der Homepage (ISC) und traegt sie in den
 Cloud-Kalender "DLRG DIN oeffentlich" ein.
 
 Regeln:
-- Nur kommende Termine werden eingetragen bzw. aktualisiert.
+- Kommende (und mit VERGANGENE_UEBERNEHMEN auch vergangene) Termine werden eingetragen bzw. aktualisiert.
 - Termine, deren Titel einen Begriff aus AUSSCHLIESSEN enthalten, kommen nicht rein
   (bereits eingetragene werden wieder entfernt).
 - Abgesagte Termine (Titel beginnt mit "Abgesagt") werden entfernt, wenn
@@ -36,9 +36,9 @@ ISC_URL = os.environ.get("ISC_URL") or "https://dinslaken.dlrg.de/die-ortsgruppe
 AUSSCHLIESSEN = [
     "Aufsicht Wassergymnastik",
     "Kurs Wassergewöhnung",
-    
 ]
 ABGESAGTE_ENTFERNEN = True
+VERGANGENE_UEBERNEHMEN = True      # auch vergangene ISC-Termine eintragen (fuer den Rueckblick)
 # Name des Cloud-Kalenders (wie er in der DLRG Cloud links angezeigt wird)
 KALENDER_NAME = os.environ.get("KALENDER_NAME") or "DLRG DIN öffentlich"
 DOPPELTE_ENTFERNEN = True
@@ -301,10 +301,11 @@ def main():
             unwanted.add(name); continue
         if ABGESAGTE_ENTFERNEN and s.lower().startswith("abgesagt"):
             unwanted.add(name); continue
-        if info["last"] < now:
+        if info["last"] < now and not VERGANGENE_UEBERNEHMEN:
             continue  # vergangen: nicht neu eintragen, aber auch nicht loeschen
         wanted[name] = build_calendar(tz_blocks, b, PREFIX + info["uid"] + "@dinslaken.dlrg.de")
-        isc_future.append(info)
+        if info["last"] >= now:
+            isc_future.append(info)
 
     # 2) Cloud-Kalender lesen
     cal = CalDAV(finde_kalender(url, user, pw, KALENDER_NAME), user, pw)
