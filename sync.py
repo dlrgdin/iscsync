@@ -22,7 +22,8 @@ Regeln:
   "ISC: <Stichwort>" schreiben (z. B. "ISC: 403"), dann wird genau danach gesucht.
 
 Zugangsdaten kommen aus Umgebungsvariablen (bei GitHub: "Secrets"):
-  CALDAV_URL       Adresse des Cloud-Kalenders (endet mit /)
+  CALDAV_URL       Adresse der DLRG Cloud, z. B. https://dlrg.cloud
+                   (der Kalender wird ueber KALENDER_NAME gesucht)
   CALDAV_USER      DLRG-Benutzername
   CALDAV_PASSWORD  App-Passwort aus der DLRG Cloud
 Optional: TESTLAUF=1  -> zeigt nur an, was passieren wuerde, aendert nichts.
@@ -35,8 +36,12 @@ ISC_URL = os.environ.get("ISC_URL") or "https://dinslaken.dlrg.de/die-ortsgruppe
 AUSSCHLIESSEN = [
     "Aufsicht Wassergymnastik",
     "Kurs Wassergewöhnung",
+    "Rettungsschwimmabzeichen",
+    "Schwimmen lernen für Erwachsene",
 ]
 ABGESAGTE_ENTFERNEN = True
+# Name des Cloud-Kalenders (wie er in der DLRG Cloud links angezeigt wird)
+KALENDER_NAME = os.environ.get("KALENDER_NAME") or "DLRG DIN öffentlich"
 DOPPELTE_ENTFERNEN = True
 # Abkuerzungen in eigenen Terminen -> Wortanfang im ISC-Titel
 ABKUERZUNGEN = {
@@ -202,6 +207,64 @@ class CalDAV:
         return self.req("DELETE", self.url + urllib.parse.quote(name))
 
 
+def kalender_ordner(dav, root):
+    ns = {"d": "DAV:", "c": "urn:ietf:params:xml:ns:caldav"}
+    hdr = {"Depth": "0", "Content-Type": "application/xml; charset=utf-8"}
+    b1 = '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:current-user-principal/></d:prop></d:propfind>'
+    st, txt = dav.req("PROPFIND", root + "/remote.php/dav/", b1, hdr)
+    if st == 401:
+        raise SystemExit("FEHLER: Anmeldung fehlgeschlagen (401). Benutzername/App-Passwort pruefen.")
+    el = ET.fromstring(txt).find(".//d:current-user-principal/d:href", ns) if st == 207 else None
+    if el is None:
+        raise SystemExit(f"FEHLER: Benutzer in der Cloud nicht gefunden (HTTP {st}).")
+    b2 = ('<?xml version="1.0"?><d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">'
+          '<d:prop><c:calendar-home-set/></d:prop></d:propfind>')
+    st, txt = dav.req("PROPFIND", root + el.text, b2, hdr)
+    el2 = ET.fromstring(txt).find(".//c:calendar-home-set/d:href", ns) if st == 207 else None
+    if el2 is None:
+        raise SystemExit(f"FEHLER: Kalender-Ordner nicht gefunden (HTTP {st}).")
+    h = el2.text if el2.text.startswith("http") else root + el2.text
+    return h if h.endswith("/") else h + "/"
+
+
+def finde_kalender(basis, user, pw, name):
+    """Sucht in der Cloud den Kalender mit dem angegebenen Namen und liefert seine CalDAV-Adresse."""
+    p = urllib.parse.urlsplit(basis.strip())
+    root = f"{p.scheme}://{p.netloc}"
+    pfad = p.path
+    if "/remote.php/dav/calendars/" in pfad and "?" not in basis and "public" not in pfad:
+        return basis if basis.endswith("/") else basis + "/"
+    tmp = CalDAV(root + "/", user, pw)
+    home = f"{root}/remote.php/dav/calendars/{urllib.parse.quote(user)}/"
+    body = ('<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:" '
+            'xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><d:displayname/><d:resourcetype/>'
+            '</d:prop></d:propfind>')
+    st, txt = tmp.req("PROPFIND", home, body, {"Depth": "1", "Content-Type": "application/xml; charset=utf-8"})
+    if st == 404:
+        # Benutzer-ID weicht vom Login ab -> Kalender-Ordner ueber den Server ermitteln
+        home = kalender_ordner(tmp, root)
+        st, txt = tmp.req("PROPFIND", home, body, {"Depth": "1", "Content-Type": "application/xml; charset=utf-8"})
+    if st == 401:
+        raise SystemExit("FEHLER: Anmeldung fehlgeschlagen (401). Benutzername/App-Passwort pruefen.")
+    if st != 207:
+        raise SystemExit(f"FEHLER: Kalenderliste nicht lesbar (HTTP {st}) unter {home}\n{txt[:300]}")
+    ns = {"d": "DAV:", "c": "urn:ietf:params:xml:ns:caldav"}
+    gefunden = []
+    def norm(x): return re.sub(r"\s+", " ", (x or "").strip().lower())
+    for r in ET.fromstring(txt).findall("d:response", ns):
+        if r.find(".//c:calendar", ns) is None:
+            continue
+        dn = r.find(".//d:displayname", ns)
+        dn = dn.text if dn is not None else ""
+        href = r.find("d:href", ns).text
+        gefunden.append(dn)
+        if norm(dn) == norm(name):
+            url = href if href.startswith("http") else root + href
+            print(f"Kalender gefunden: {dn}")
+            return url if url.endswith("/") else url + "/"
+    raise SystemExit(f"FEHLER: Kalender '{name}' nicht gefunden. Vorhandene Kalender: {', '.join(gefunden) or '(keine)'}")
+
+
 def build_calendar(tz_blocks, ev_block, new_uid):
     ev = re.sub(r"^UID:.*$", f"UID:{new_uid}", ev_block, count=1, flags=re.M)
     ev = ev.replace("END:VEVENT", "X-ISC-SYNC:1\nEND:VEVENT")
@@ -245,7 +308,7 @@ def main():
         isc_future.append(info)
 
     # 2) Cloud-Kalender lesen
-    cal = CalDAV(url, user, pw)
+    cal = CalDAV(finde_kalender(url, user, pw, KALENDER_NAME), user, pw)
     existing = cal.list_all()
 
     stats = {"neu": 0, "aktualisiert": 0, "entfernt": 0, "doppelt": 0, "fehler": 0}
