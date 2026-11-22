@@ -36,8 +36,7 @@ ISC_URL = os.environ.get("ISC_URL") or "https://dinslaken.dlrg.de/die-ortsgruppe
 AUSSCHLIESSEN = [
     "Aufsicht Wassergymnastik",
     "Kurs Wassergewöhnung",
-    "Rettungsschwimmabzeichen",
-    "Schwimmen lernen für Erwachsene",
+    
 ]
 ABGESAGTE_ENTFERNEN = True
 # Name des Cloud-Kalenders (wie er in der DLRG Cloud links angezeigt wird)
