@@ -13,7 +13,8 @@ MONATE_VORAUS = 12                 # wie weit in die Zukunft
 MONATE_ZURUECK = 12                # wie weit zurueck (vergangene Termine)
 TITEL = "Termine"
 UNTERTITEL = "DLRG Ortsgruppe Dinslaken e.V."
-ABO_LINK = os.environ.get("ABO_LINK", "")   # oeffentlicher Abo-Link (webcal/https), optional
+ABO_LINK = os.environ.get("ABO_LINK") or "webcal://dlrgdin.github.io/iscsync/termine.ics"
+ABO_NAME = "DLRG Dinslaken – Termine"
 # Kategorien: Stichwort im Titel/Kategorie -> angezeigte Kategorie
 KATEGORIEN = [
     ("Jugend",        ["jugend", "kinder", "mottoabend"]),
@@ -372,6 +373,35 @@ TEMPLATE = r"""<!DOCTYPE html>
 """
 
 
+def abo_datei(texte):
+    """Erzeugt docs/termine.ics mit denselben Terminen wie die Webseite (fuer Kalender-Abos)."""
+    tz, evs, uids = {}, [], set()
+    for t in texte:
+        u = unfold(t)
+        for z in blocks(u, "VTIMEZONE"):
+            tz[prop(z, "TZID")[1]] = z
+        for b in blocks(u, "VEVENT"):
+            titel = unescape(prop(b, "SUMMARY")[1]).strip()
+            if not titel or (prop(b, "CLASS")[1] or "").upper() in ("PRIVATE", "CONFIDENTIAL"):
+                continue
+            if (prop(b, "STATUS")[1] or "").upper() == "CANCELLED" or titel.lower().startswith("abgesagt"):
+                continue
+            uid = prop(b, "UID")[1] or ""
+            key = uid + "|" + (prop(b, "RECURRENCE-ID")[1] or "")
+            if key in uids:
+                continue
+            uids.add(key)
+            b = re.sub(r"^X-ISC-SYNC:.*\n", "", b, flags=re.M)
+            evs.append(b)
+    kopf = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//DLRG Dinslaken//Terminkalender//DE",
+            "CALSCALE:GREGORIAN", "METHOD:PUBLISH", f"X-WR-CALNAME:{ABO_NAME}",
+            "X-WR-TIMEZONE:Europe/Berlin", "REFRESH-INTERVAL;VALUE=DURATION:PT6H", "X-PUBLISHED-TTL:PT6H"]
+    text = "\n".join(kopf + list(tz.values()) + evs + ["END:VCALENDAR"]) + "\n"
+    with open("docs/termine.ics", "w", encoding="utf-8", newline="") as f:
+        f.write(text.replace("\n", "\r\n"))
+    return len(evs)
+
+
 def main():
     jetzt = dt.datetime.now(BERLIN)
     heute0 = jetzt.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -387,7 +417,8 @@ def main():
     os.makedirs("docs", exist_ok=True)
     with open("docs/index.html", "w", encoding="utf-8") as f:
         f.write(render(termine, jetzt.strftime("%d.%m.%Y, %H:%M Uhr")))
-    print(f"Terminliste erstellt: {len(termine)} Termine.")
+    n = abo_datei(texte)
+    print(f"Terminliste erstellt: {len(termine)} Termine. Abo-Datei: {n} Termine.")
 
 
 if __name__ == "__main__":
